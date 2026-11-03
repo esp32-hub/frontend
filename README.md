@@ -1,6 +1,6 @@
 # Frontend — ESP32 Sensor Monitor
 
-Dashboard web para visualização das leituras de sensores enviadas por dispositivos ESP32, consumindo a API do [Backend-PHP](../Backend-PHP/).
+Dashboard web para visualização das leituras de sensores enviadas por dispositivos ESP32, consumindo a API do [backend-php](https://github.com/esp32-hub/backend-php).
 
 > 🚧 **Status v1:** Em desenvolvimento
 
@@ -22,7 +22,7 @@ frontend/
 A URL da API é definida diretamente no `index.html`:
 
 ```js
-const API_BASE = 'http://localhost/Backend-PHP/listar.php'
+const API_BASE = 'http://localhost/backend-php/listar.php'
 ```
 
 Altere o valor de `API_BASE` para apontar ao endereço correto do backend antes de abrir no navegador.
