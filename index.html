@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP32 — Monitor de Sensores</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            emerald: { DEFAULT: '#10b981' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-black text-white min-h-screen font-mono">
+
+  <!-- Header -->
+  <header class="border-b border-white/10 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+      <h1 class="text-lg font-semibold tracking-wide">ESP32 Varal Sensores</h1>
+    </div>
+    <span id="last-update" class="text-xs text-white/40">—</span>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-8 space-y-8">
+
+    <!-- Cards de resumo -->
+    <section class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="bg-white/5 border border-white/10 rounded-xl p-5">
+        <p class="text-xs text-white/40 uppercase tracking-widest mb-1">Total de Leituras</p>
+        <p id="card-total" class="text-3xl font-bold text-emerald-400">—</p>
+      </div>
+      <div class="bg-white/5 border border-white/10 rounded-xl p-5">
+        <p class="text-xs text-white/40 uppercase tracking-widest mb-1">Última Temperatura</p>
+        <p id="card-temp" class="text-3xl font-bold text-white">—</p>
+      </div>
+      <div class="bg-white/5 border border-white/10 rounded-xl p-5">
+        <p class="text-xs text-white/40 uppercase tracking-widest mb-1">Última Umidade</p>
+        <p id="card-umid" class="text-3xl font-bold text-white">—</p>
+      </div>
+    </section>
+
+    <!-- Tabela -->
+    <section class="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-white/10">
+        <h2 class="text-sm font-semibold text-white/70 uppercase tracking-widest">Leituras</h2>
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-white/40">Por página:</label>
+          <select id="limit-select" class="bg-black border border-white/20 text-white text-xs rounded px-2 py-1 focus:outline-none focus:border-emerald-400">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Estado de carregamento / erro -->
+      <div id="state-msg" class="px-5 py-10 text-center text-white/30 text-sm">Carregando...</div>
+
+      <div id="table-wrap" class="relative hidden overflow-x-auto">
+        <div id="loading-overlay" class="hidden absolute inset-0 bg-black/60 flex items-center justify-center z-10">
+          <span class="text-emerald-400 text-xs animate-pulse">Carregando...</span>
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-xs text-white/40 uppercase tracking-widest border-b border-white/10">
+              <th class="px-5 py-3 text-left">#</th>
+              <th class="px-5 py-3 text-left">Temperatura</th>
+              <th class="px-5 py-3 text-left">Umidade</th>
+              <th class="px-5 py-3 text-left">Predição</th>
+              <th class="px-5 py-3 text-left">Data / Hora</th>
+            </tr>
+          </thead>
+          <tbody id="table-body" class="divide-y divide-white/5"></tbody>
+        </table>
+      </div>
+
+      <!-- Paginação -->
+      <div id="pagination" class="hidden px-5 py-4 border-t border-white/10 flex items-center justify-between text-xs text-white/40">
+        <span id="page-info"></span>
+        <div class="flex gap-2">
+          <button id="btn-prev" onclick="changePage(-1)"
+            class="px-3 py-1.5 rounded border border-white/20 hover:border-emerald-400 hover:text-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-white/20 disabled:hover:text-white/40 transition">
+            ← Anterior
+          </button>
+          <button id="btn-next" onclick="changePage(1)"
+            class="px-3 py-1.5 rounded border border-white/20 hover:border-emerald-400 hover:text-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-white/20 disabled:hover:text-white/40 transition">
+            Próxima →
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const API_BASE = 'http://localhost/backend-php/listar.php'
+
+    let offset       = 0
+    let limit        = 50
+    let total        = 0
+    let refreshTimer = null
+
+    function esc(val) {
+      return String(val ?? '—')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    }
+
+    const PREDICAO_STYLE = {
+      normal:  'bg-emerald-400/10 text-emerald-400 border-emerald-400/30',
+      alerta:  'bg-yellow-400/10 text-yellow-400 border-yellow-400/30',
+      critico: 'bg-red-400/10 text-red-400 border-red-400/30',
+    }
+
+    function predicaoClass(p) {
+      return PREDICAO_STYLE[p?.toLowerCase()] ?? 'bg-white/10 text-white/60 border-white/20'
+    }
+
+    async function fetchData() {
+      const stateMsg       = document.getElementById('state-msg')
+      const tableWrap      = document.getElementById('table-wrap')
+      const pagination     = document.getElementById('pagination')
+      const loadingOverlay = document.getElementById('loading-overlay')
+      const firstLoad      = tableWrap.classList.contains('hidden')
+
+      if (firstLoad) {
+        stateMsg.textContent = 'Carregando...'
+        stateMsg.classList.remove('hidden')
+      } else {
+        loadingOverlay.classList.remove('hidden')
+      }
+
+      try {
+        const res  = await fetch(`${API_BASE}?limit=${limit}&offset=${offset}`)
+        const json = await res.json()
+
+        if (json.status !== 'sucesso') throw new Error(json.mensagem)
+
+        total = json.total
+        renderCards(json.dados, json.total)
+        renderTable(json.dados)
+        renderPagination(json.total)
+
+        stateMsg.classList.add('hidden')
+        tableWrap.classList.remove('hidden')
+        pagination.classList.remove('hidden')
+
+        document.getElementById('last-update').textContent =
+          'Atualizado: ' + new Date().toLocaleTimeString('pt-BR')
+
+      } catch (err) {
+        stateMsg.textContent = 'Erro ao carregar dados: ' + err.message
+        stateMsg.classList.remove('hidden')
+      } finally {
+        loadingOverlay.classList.add('hidden')
+      }
+    }
+
+    function renderCards(dados, totalCount) {
+      document.getElementById('card-total').textContent = totalCount.toLocaleString('pt-BR')
+      if (dados.length === 0) return
+      const last = dados[0]
+      document.getElementById('card-temp').textContent = last.temperatura + ' °C'
+      document.getElementById('card-umid').textContent = last.umidade + ' %'
+    }
+
+    function renderTable(dados) {
+      const tbody = document.getElementById('table-body')
+      if (dados.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-5 py-8 text-center text-white/30">Nenhuma leitura encontrada.</td></tr>'
+        return
+      }
+      tbody.innerHTML = dados.map(row => `
+        <tr class="hover:bg-white/5 transition">
+          <td class="px-5 py-3 text-white/30">${esc(row.id)}</td>
+          <td class="px-5 py-3">${esc(row.temperatura)} <span class="text-white/30">°C</span></td>
+          <td class="px-5 py-3">${esc(row.umidade)} <span class="text-white/30">%</span></td>
+          <td class="px-5 py-3">
+            <span class="px-2 py-0.5 rounded border text-xs font-medium ${predicaoClass(row.predicao)}">
+              ${esc(row.predicao)}
+            </span>
+          </td>
+          <td class="px-5 py-3 text-white/50">${formatDate(row.criado_em)}</td>
+        </tr>
+      `).join('')
+    }
+
+    function renderPagination(total) {
+      const start = offset + 1
+      const end   = Math.min(offset + limit, total)
+      document.getElementById('page-info').textContent = `${start}–${end} de ${total}`
+      document.getElementById('btn-prev').toggleAttribute('disabled', offset === 0)
+      document.getElementById('btn-next').toggleAttribute('disabled', offset + limit >= total)
+    }
+
+    function changePage(dir) {
+      offset = Math.max(0, offset + dir * limit)
+      fetchData()
+    }
+
+    function formatDate(str) {
+      if (!str) return '—'
+      const iso = str.replace(' ', 'T')
+      const d   = new Date(/[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z')
+      return isNaN(d) ? str : d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+    }
+
+    document.getElementById('limit-select').addEventListener('change', e => {
+      limit  = parseInt(e.target.value)
+      offset = 0
+      fetchData()
+    })
+
+    fetchData()
+    refreshTimer = setInterval(fetchData, 30_000)
+  </script>
+</body>
+</html>
