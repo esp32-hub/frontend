@@ -22,7 +22,7 @@ frontend/
 A URL da API é definida diretamente no `index.html`:
 
 ```js
-const API_BASE = 'http://localhost/backend-php/listar.php'
+const API_BASE = 'http://localhost/varal/listar.php'
 ```
 
 Altere o valor de `API_BASE` para apontar ao endereço correto do backend antes de abrir no navegador.
